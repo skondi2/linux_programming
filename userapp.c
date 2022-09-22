@@ -18,9 +18,9 @@ int main(int argc, char* argv[])
 	int pid = getpid();
 	fprintf(ptr, "%d", pid);
 	fclose(ptr);
-
+	
 	// fibonacci sequence for large number
-	fibonacci(100);
+	fibonacci(45);
 
 	// read from /proc/mp1/status
 	ptr = fopen("/proc/mp1/status", "r");
@@ -28,12 +28,13 @@ int main(int argc, char* argv[])
 		printf("Trying to read, failed to open proc file\n");
 		return 1;
 	}
+
 	char ch;
-	while (!feof(ptr)) {
+	do {
 		ch = fgetc(ptr);
 		printf("%c", ch);
-	}
+	} while (ch != EOF);
 	fclose(ptr);
-	
+
 	return 0;
 }

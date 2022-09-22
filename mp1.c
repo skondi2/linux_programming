@@ -24,42 +24,40 @@ struct process_list {
    int pid;
    unsigned long cpu_time;
 };
-struct process_list registered_processes;
+struct process_list* registered_processes;
 struct timer_list* timer;
+struct workqueue_struct* queue;
 struct work_struct* work;
 spinlock_t lock;
 
 // ---------------------------------------------------------------------------------------------------------------
-void update_cpu_times(struct work_struct *work) {
-   //printk(KERN_ALERT "work function should be called every 5 seconds %lu\n", jiffies);
 
-   struct process_list* tmp;
-   struct list_head* curr_pos;
+void update_cpu_times(struct work_struct *work) {
+   struct process_list *tmp;
+   struct list_head *curr_pos, *q;
    
    spin_lock_irq(&lock);
-   list_for_each(curr_pos, &registered_processes.list) {
+   list_for_each_safe(curr_pos, q, &(registered_processes->list)) {
       tmp = list_entry(curr_pos, struct process_list, list);
       int pid = tmp->pid;
-
+      
       unsigned long new_cpu_time = 0;
-      int success = get_cpu_use((int)pid, &new_cpu_time);
+      int success = get_cpu_use(pid, &new_cpu_time);
       if (success == -1) { // remove node from the list
          list_del(curr_pos);
          kfree(tmp);
       }
       else {
-         //printk("update_cpu_time(): new cpu time is %lu\n", new_cpu_time);
+         //printk("MP1 update_cpu_times(): new cpu time = -->%lu<--\n", new_cpu_time);
          tmp->cpu_time = new_cpu_time;
       }
    }
    spin_unlock_irq(&lock);
-
-   mod_timer(timer, jiffies + 5*HZ);
 }
 
 void timer_callback(struct timer_list* data) {
-   // puts the job into the kernel-global workqueue
-   schedule_work(work);
+   queue_work(queue, work);
+   mod_timer(timer, jiffies + 5*HZ);
 }
 
 /*
@@ -75,8 +73,8 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
       return 0;
    }
    
-   char* data = kmalloc(size + 1, GFP_KERNEL);
-   memset(data, 0, size + 1); // CHECK: + 1 is correct????
+   char* data = kmalloc(size, GFP_KERNEL);
+   memset(data, 0, size);
 
    // write to data the linked list node data
    int bytes_read = 0;
@@ -84,7 +82,7 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
    struct list_head* curr_pos;
 
    spin_lock_irq(&lock);
-   list_for_each(curr_pos, &registered_processes.list) {
+   list_for_each(curr_pos, &(registered_processes->list)) {
       tmp = list_entry(curr_pos, struct process_list, list);
       int pid = tmp->pid;
       unsigned long cpu_time = tmp->cpu_time;
@@ -92,14 +90,16 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
       int curr_bytes_read = sprintf(data + bytes_read, "%d: %lu\n", pid, cpu_time);
       bytes_read += curr_bytes_read;
    }
-   spin_unlock_irq(&lock);
    data[bytes_read] = '\0';
-
-   int success = copy_to_user(buf, data, bytes_read + 1);
+   spin_unlock_irq(&lock);
+   
+   int success = copy_to_user(buf, data, bytes_read+1);
    if (success != 0) {
-      //printk(KERN_ALERT "proc_read_callback(): Failed to copy data to user space\n");
+      //printk("MP1 copy_to_user failed\n");
       return 0;
    }
+   kfree(data);
+   //printk("MP1 read_callback(): bytes_read = %d\n", bytes_read);
 
    *pos += bytes_read;
    return bytes_read; // return the number of bytes that were read
@@ -117,27 +117,20 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
 */
 ssize_t proc_write_callback(struct file* file, const char __user *buf, size_t size, loff_t* pos) {
    if (*pos != 0) {
-      printk(KERN_ALERT "proc_write_callback(): pos offset != 0\n");
+      //printk("MP1 write_callback() returning 0");
       return 0;
    }
    
    // buf belongs in user space, need to make copy of it
-   char buf_cpy[size + 1];
-   memset(buf_cpy, 0, size + 1);
-   int success = copy_from_user(buf_cpy, buf, size + 1);
+   char buf_cpy[size+1];
+   memset(buf_cpy, 0, size+1);
    buf_cpy[size] = '\0';
-   if (success != 0) {
-      printk(KERN_ALERT "proc_write_callback(): Failed to copy buf to kernel space\n");
-      return -EFAULT;
-   }
+   int success = copy_from_user(buf_cpy, buf, size+1);
+   //printk("MP1 write_callback(): buf_cpy = %s", buf_cpy);
 
    // convert pid to int
    int pid = 0;
    success = kstrtoint(buf_cpy, 10, &pid);
-   if (success != 0) {
-      printk(KERN_ALERT "proc_write_callback(): Failed to convert pid to int\n");
-      return -EFAULT;
-   }
 
    // get current cpu usage
    unsigned long cpu_time = 0;
@@ -146,10 +139,10 @@ ssize_t proc_write_callback(struct file* file, const char __user *buf, size_t si
    struct process_list* tmp = (struct process_list*) kmalloc(sizeof(struct process_list), GFP_KERNEL);
    tmp->pid = pid;
    tmp->cpu_time = cpu_time;
-   INIT_LIST_HEAD(&tmp->list);
+   INIT_LIST_HEAD(&(tmp->list));
 
    spin_lock_irq(&lock);
-   list_add_tail(&(tmp->list), &(registered_processes.list));
+   list_add_tail(&(tmp->list), &(registered_processes->list));
    spin_unlock_irq(&lock);
 
    return size;
@@ -177,16 +170,17 @@ int __init mp1_init(void)
    proc_dir = proc_mkdir("mp1", NULL);
    proc_file = proc_create("status", 0666, proc_dir, &proc_fops); 
 
+   registered_processes = kmalloc(sizeof(struct process_list), GFP_KERNEL);
+   INIT_LIST_HEAD(&(registered_processes->list));
+
    spin_lock_init(&lock);
 
-   INIT_LIST_HEAD(&registered_processes.list);
+   queue = create_workqueue("queue");
 
    timer = kmalloc(sizeof(struct timer_list), GFP_KERNEL);
    timer_setup(timer, timer_callback, 0);
    mod_timer(timer, jiffies + 5*HZ);
 
-   // update_cpu_times() is the function to be scheduled in the workqueue
-   // creates a workqueue with the name work
    work = kmalloc(sizeof(struct work_struct), GFP_KERNEL);
    INIT_WORK(work, update_cpu_times); 
 
@@ -211,10 +205,12 @@ void __exit mp1_exit(void)
    cancel_work_sync(work);
    kfree(work);
 
+   destroy_workqueue(queue);
+
    struct process_list *tmp;
    struct list_head *pos, *q;
-   list_for_each_safe(pos, q, &registered_processes.list) {
-      printk(KERN_ALERT "mp1_exit(): deleting elements of list\n");
+   list_for_each_safe(pos, q, &(registered_processes->list)) {
+      //printk(KERN_ALERT "mp1_exit(): deleting elements of list\n");
       tmp = list_entry(pos, struct process_list, list);
       list_del(pos);
       kfree(tmp);
