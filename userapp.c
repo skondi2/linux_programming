@@ -23,18 +23,18 @@ int main(int argc, char* argv[])
 	fibonacci(45);
 
 	// read from /proc/mp1/status
-	/*ptr = fopen("/proc/mp1/status", "r");
-	if (ptr == NULL) {
+	FILE* ptr1 = fopen("/proc/mp1/status", "r");
+	if (ptr1 == NULL) {
 		printf("Trying to read, failed to open proc file\n");
 		return 1;
 	}
 
 	char ch;
 	do {
-		ch = fgetc(ptr);
+		ch = fgetc(ptr1);
 		printf("%c", ch);
 	} while (ch != EOF);
-	fclose(ptr);*/
+	fclose(ptr1);
 
 	return 0;
 }
