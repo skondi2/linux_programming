@@ -48,19 +48,20 @@ void update_cpu_times(struct work_struct *work) {
          kfree(tmp);
       }
       else {
-         //printk("MP1 update_cpu_times(): new cpu time = -->%lu<--\n", new_cpu_time);
          tmp->cpu_time = new_cpu_time;
       }
    }
    spin_unlock_irq(&lock);
 }
 
-void timer_callback(struct timer_list* data) {
+void _timer_callback(struct timer_list* data) {
    queue_work(queue, work);
    mod_timer(timer, jiffies + 5*HZ);
 }
 
 /*
+   "Read" from proc file
+   
    file: pointer to /mp1/status
    buf: the data we want to fill with
    size: number of bytes to read from the file
@@ -95,11 +96,9 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
    
    int success = copy_to_user(buf, data, bytes_read+1);
    if (success != 0) {
-      //printk("MP1 copy_to_user failed\n");
       return 0;
    }
    kfree(data);
-   //printk("MP1 read_callback(): bytes_read = %d\n", bytes_read);
 
    *pos += bytes_read;
    return bytes_read; // return the number of bytes that were read
@@ -108,6 +107,8 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
 // ---------------------------------------------------------------------------------------------------------------
 
 /*
+   "Write" to proc file
+
    file: pointer to /mp1/status
    buf: the data we want to write to the file (aka: the PID)
    size: number of bytes we want to write to the file
@@ -117,7 +118,6 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
 */
 ssize_t proc_write_callback(struct file* file, const char __user *buf, size_t size, loff_t* pos) {
    if (*pos != 0) {
-      //printk("MP1 write_callback() returning 0");
       return 0;
    }
    
@@ -126,7 +126,6 @@ ssize_t proc_write_callback(struct file* file, const char __user *buf, size_t si
    memset(buf_cpy, 0, size+1);
    buf_cpy[size] = '\0';
    int success = copy_from_user(buf_cpy, buf, size+1);
-   //printk("MP1 write_callback(): buf_cpy = %s", buf_cpy);
 
    // convert pid to int
    int pid = 0;
@@ -178,7 +177,7 @@ int __init mp1_init(void)
    queue = create_workqueue("queue");
 
    timer = kmalloc(sizeof(struct timer_list), GFP_KERNEL);
-   timer_setup(timer, timer_callback, 0);
+   timer_setup(timer, _timer_callback, 0);
    mod_timer(timer, jiffies + 5*HZ);
 
    work = kmalloc(sizeof(struct work_struct), GFP_KERNEL);
@@ -210,7 +209,6 @@ void __exit mp1_exit(void)
    struct process_list *tmp;
    struct list_head *pos, *q;
    list_for_each_safe(pos, q, &(registered_processes->list)) {
-      //printk(KERN_ALERT "mp1_exit(): deleting elements of list\n");
       tmp = list_entry(pos, struct process_list, list);
       list_del(pos);
       kfree(tmp);
