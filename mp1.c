@@ -70,10 +70,6 @@ void _timer_callback(struct timer_list* data) {
    return the size of the buffer we filled
 */
 ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, loff_t* pos) {
-   if (*pos != 0) { // CHECK: is it safe to just do this????
-      return 0;
-   }
-   
    char* data = kmalloc(size, GFP_KERNEL);
    memset(data, 0, size);
 
@@ -88,19 +84,24 @@ ssize_t proc_read_callback(struct file* file, char __user *buf, size_t size, lof
       int pid = tmp->pid;
       unsigned long cpu_time = tmp->cpu_time;
 
-      int curr_bytes_read = sprintf(data + bytes_read, "%d: %lu\n", pid, cpu_time);
-      bytes_read += curr_bytes_read;
+      if (pid > *pos) {
+         int curr_bytes_read = sprintf(data + bytes_read, "%d: %lu\n", pid, cpu_time);
+         if (bytes_read + curr_bytes_read >= size) {
+            break;
+         }
+         *pos = pid;
+         bytes_read += curr_bytes_read;
+      }
    }
    data[bytes_read] = '\0';
    spin_unlock_irq(&lock);
-   
+
    int success = copy_to_user(buf, data, bytes_read+1);
    if (success != 0) {
       return 0;
    }
    kfree(data);
 
-   *pos += bytes_read;
    return bytes_read; // return the number of bytes that were read
 }
 
